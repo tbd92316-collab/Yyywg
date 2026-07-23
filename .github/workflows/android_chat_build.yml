@@ -1,0 +1,613 @@
+name: Build Android Local Chat App (.apk)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java Development Kit (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Generate Android Chat App Automatically
+        run: |
+          # 1. Create Flutter Project
+          flutter create --org com.globalchat --project-name global_chat_app global_chat_app
+
+          # 2. Add Dependencies
+          cat << 'EOF' > global_chat_app/pubspec.yaml
+          name: global_chat_app
+          description: "Offline Wi-Fi Global Chat App"
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            socket_io_client: ^2.0.3+1
+            path_provider: ^2.1.2
+            network_info_plus: ^5.0.1
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+          # 3. AndroidManifest.xml
+          cat << 'EOF' > global_chat_app/android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+
+              <application
+                  android:label="Global Offline Chat"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:value="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # 4. Set minSdkVersion 21
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/g' global_chat_app/android/app/build.gradle
+
+          # 5. Fixed Flutter Application Code
+          cat << 'EOF' > global_chat_app/lib/main.dart
+          import 'dart:async';
+          import 'dart:convert';
+          import 'dart:io';
+          import 'package:flutter/material.dart';
+          import 'package:network_info_plus/network_info_plus.dart';
+          import 'package:path_provider/path_provider.dart';
+
+          void main() {
+            runApp(const GlobalChatApp());
+          }
+
+          class GlobalChatApp extends StatelessWidget {
+            const GlobalChatApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                debugShowCheckedModeBanner: false,
+                title: 'Global Wi-Fi Chat',
+                theme: ThemeData.dark(useMaterial3: true),
+                home: const HomeScreen(),
+              );
+            }
+          }
+
+          class HomeScreen extends StatefulWidget {
+            const HomeScreen({super.key});
+
+            @override
+            State<HomeScreen> createState() => _HomeScreenState();
+          }
+
+          class _HomeScreenState extends State<HomeScreen> {
+            final TextEditingController _ipController = TextEditingController();
+            String myIp = "Detecting IP...";
+
+            @override
+            void initState() {
+              super.initState();
+              _fetchLocalIp();
+            }
+
+            Future<void> _fetchLocalIp() async {
+              try {
+                final info = NetworkInfo();
+                String? ip = await info.getWifiIP();
+                if (ip == null || ip.isEmpty) {
+                  for (var interface in await NetworkInterface.list()) {
+                    for (var addr in interface.addresses) {
+                      if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+                        ip = addr.address;
+                        break;
+                      }
+                    }
+                  }
+                }
+                setState(() {
+                  myIp = ip ?? "127.0.0.1";
+                });
+              } catch (e) {
+                setState(() {
+                  myIp = "Unable to fetch IP";
+                });
+              }
+            }
+
+            void _askUsernameAndProceed(bool isHost) {
+              TextEditingController nameController = TextEditingController();
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => AlertDialog(
+                  title: Text(isHost ? "Start Server as Host" : "Join Chat Board"),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: "Enter Your Display Name",
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      if (!isHost) ...[
+                        const SizedBox(height: 15),
+                        TextField(
+                          controller: _ipController,
+                          decoration: const InputDecoration(
+                            labelText: "Enter Host IP Address",
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ]
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text("Cancel"),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        String name = nameController.text.trim();
+                        if (name.isEmpty) return;
+                        if (!isHost && _ipController.text.trim().isEmpty) return;
+
+                        Navigator.pop(context);
+                        
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ChatScreen(
+                              isHost: isHost,
+                              username: name,
+                              serverIp: isHost ? myIp : _ipController.text.trim(),
+                            ),
+                          ),
+                        );
+                      },
+                      child: Text(isHost ? "Start" : "Join"),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text("Global Offline Chat"),
+                  centerTitle: true,
+                ),
+                body: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.wifi_tethering, size: 90, color: Colors.blueAccent),
+                        const SizedBox(height: 20),
+                        Text(
+                          "Your IP Address: $myIp",
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.greenAccent),
+                        ),
+                        const SizedBox(height: 40),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 55,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                            icon: const Icon(Icons.dns, color: Colors.white),
+                            label: const Text("Start Server (Host)", style: TextStyle(fontSize: 18, color: Colors.white)),
+                            onPressed: () => _askUsernameAndProceed(true),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 55,
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                            icon: const Icon(Icons.group_add, color: Colors.white),
+                            label: const Text("Join Chat Board", style: TextStyle(fontSize: 18, color: Colors.white)),
+                            onPressed: () => _askUsernameAndProceed(false),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }
+          }
+
+          class ChatScreen extends StatefulWidget {
+            final bool isHost;
+            final String username;
+            final String serverIp;
+
+            const ChatScreen({
+              super.key,
+              required this.isHost,
+              required this.username,
+              required this.serverIp,
+            });
+
+            @override
+            State<ChatScreen> createState() => _ChatScreenState();
+          }
+
+          class _ChatScreenState extends State<ChatScreen> {
+            HttpServer? _rawServer;
+            List<Map<String, dynamic>> messages = [];
+            final TextEditingController _msgController = TextEditingController();
+            File? _hiddenHistoryFile;
+            List<WebSocket> connectedClients = [];
+            WebSocket? _clientWs;
+
+            @override
+            void initState() {
+              super.initState();
+              if (widget.isHost) {
+                _startLocalServer();
+              } else {
+                _connectToServer();
+              }
+            }
+
+            Future<void> _startLocalServer() async {
+              try {
+                final dir = await getApplicationDocumentsDirectory();
+                _hiddenHistoryFile = File('${dir.path}/.chat_history.json');
+                if (!await _hiddenHistoryFile!.exists()) {
+                  await _hiddenHistoryFile!.writeAsString(jsonEncode([]));
+                }
+
+                _rawServer = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
+                
+                _rawServer!.listen((HttpRequest request) async {
+                  if (WebSocketTransformer.isUpgradeRequest(request)) {
+                    WebSocket socket = await WebSocketTransformer.upgrade(request);
+                    _handleHostWebSocket(socket);
+                  }
+                });
+
+                setState(() {
+                  messages.add({
+                    "sender": "System",
+                    "text": "Server started successfully on IP: ${widget.serverIp}:8080",
+                    "time": _currentTime()
+                  });
+                });
+              } catch (e) {
+                _showErrorAndExit("Failed to start server: $e");
+              }
+            }
+
+            void _handleHostWebSocket(WebSocket socket) {
+              connectedClients.add(socket);
+
+              socket.listen((data) {
+                try {
+                  var msg = jsonDecode(data.toString());
+                  _broadcastMessage(msg);
+                  _saveMessageToFile(msg);
+
+                  setState(() {
+                    messages.add(msg);
+                  });
+                } catch (e) {
+                  debugPrint("Error parsing message: $e");
+                }
+              }, onDone: () {
+                connectedClients.remove(socket);
+              });
+            }
+
+            void _broadcastMessage(Map<String, dynamic> msg) {
+              String encoded = jsonEncode(msg);
+              for (var client in connectedClients) {
+                client.add(encoded);
+              }
+            }
+
+            Future<void> _saveMessageToFile(Map<String, dynamic> msg) async {
+              if (_hiddenHistoryFile != null) {
+                try {
+                  List history = jsonDecode(await _hiddenHistoryFile!.readAsString());
+                  history.add(msg);
+                  await _hiddenHistoryFile!.writeAsString(jsonEncode(history));
+                } catch (e) {
+                  debugPrint("Error saving: $e");
+                }
+              }
+            }
+
+            Future<void> _connectToServer() async {
+              try {
+                _clientWs = await WebSocket.connect('ws://${widget.serverIp}:8080');
+
+                var joinMsg = {
+                  "sender": "System",
+                  "text": "${widget.username} joined the chat",
+                  "time": _currentTime()
+                };
+                _clientWs!.add(jsonEncode(joinMsg));
+
+                _clientWs!.listen((data) {
+                  var msg = jsonDecode(data.toString());
+                  setState(() {
+                    messages.add(msg);
+                  });
+                }, onDone: () {
+                  _onServerDestroyed();
+                }, onError: (error) {
+                  _onServerDestroyed();
+                });
+
+              } catch (e) {
+                _showErrorAndExit("Could not connect to host. Check IP Address.");
+              }
+            }
+
+            void _onServerDestroyed() {
+              if (!mounted) return;
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => AlertDialog(
+                  title: const Text("Server Disconnected"),
+                  content: const Text("Host destroyed server"),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        Navigator.pop(context);
+                      },
+                      child: const Text("OK"),
+                    )
+                  ],
+                ),
+              );
+            }
+
+            void _sendMessage() {
+              String text = _msgController.text.trim();
+              if (text.isEmpty) return;
+
+              var msgData = {
+                "sender": widget.username,
+                "text": text,
+                "time": _currentTime()
+              };
+
+              if (widget.isHost) {
+                _broadcastMessage(msgData);
+                _saveMessageToFile(msgData);
+                setState(() {
+                  messages.add(msgData);
+                });
+              } else {
+                _clientWs?.add(jsonEncode(msgData));
+              }
+
+              _msgController.clear();
+            }
+
+            String _currentTime() {
+              final now = DateTime.now();
+              return "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+            }
+
+            void _showErrorAndExit(String error) {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: const Text("Error"),
+                  content: Text(error),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        Navigator.pop(context);
+                      },
+                      child: const Text("OK"),
+                    )
+                  ],
+                ),
+              );
+            }
+
+            @override
+            void dispose() {
+              if (widget.isHost) {
+                for (var client in connectedClients) {
+                  client.close();
+                }
+                _rawServer?.close(force: true);
+              } else {
+                _clientWs?.close();
+              }
+              super.dispose();
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return PopScope(
+                canPop: false,
+                onPopInvoked: (didPop) async {
+                  if (didPop) return;
+                  if (widget.isHost) {
+                    bool confirm = await showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text("Destroy Server?"),
+                        content: const Text("Closing will disconnect all joined clients."),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+                          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text("Destroy")),
+                        ],
+                      ),
+                    ) ?? false;
+                    if (confirm && context.mounted) Navigator.pop(context);
+                  } else {
+                    Navigator.pop(context);
+                  }
+                },
+                child: Scaffold(
+                  appBar: AppBar(
+                    title: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(widget.isHost ? "Server (Host): ${widget.username}" : "Chat Board"),
+                        Text("IP: ${widget.serverIp}:8080", style: const TextStyle(fontSize: 12, color: Colors.greenAccent)),
+                      ],
+                    ),
+                  ),
+                  body: Column(
+                    children: [
+                      Expanded(
+                        child: ListView.builder(
+                          padding: const EdgeInsets.all(15),
+                          itemCount: messages.length,
+                          itemBuilder: (context, index) {
+                            var m = messages[index];
+                            bool isMe = m['sender'] == widget.username;
+                            bool isSystem = m['sender'] == 'System';
+
+                            if (isSystem) {
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 8),
+                                alignment: Alignment.center,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                  decoration: BoxDecoration(color: Colors.grey[800], borderRadius: BorderRadius.circular(12)),
+                                  child: Text(m['text'], style: const TextStyle(fontSize: 12, color: Colors.white70)),
+                                ),
+                              );
+                            }
+
+                            return Align(
+                              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(vertical: 4),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: isMe ? Colors.blueAccent : Colors.grey[850],
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: isMe ? CrossAlignment.end : CrossAlignment.start,
+                                  children: [
+                                    Text(
+                                      m['sender'], 
+                                      style: TextStyle(
+                                        fontSize: 11, 
+                                        fontWeight: FontWeight.bold, 
+                                        color: isMe ? Colors.white70 : Colors.lightBlueAccent
+                                      )
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(m['text'], style: const TextStyle(fontSize: 15, color: Colors.white)),
+                                    const SizedBox(height: 2),
+                                    Text(m['time'], style: const TextStyle(fontSize: 9, color: Colors.white38)),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        color: Colors.grey[900],
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _msgController,
+                                decoration: const InputDecoration(
+                                  hintText: "Type a message...",
+                                  border: InputBorder.none,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.send, color: Colors.blueAccent),
+                              onPressed: _sendMessage,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Install Dependencies
+        working-directory: ./global_chat_app
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: ./global_chat_app
+        run: flutter build apk --release
+
+      - name: Upload Chat App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Global-Chat-App
+          path: global_chat_app/build/app/outputs/flutter-apk/app-release.apk
