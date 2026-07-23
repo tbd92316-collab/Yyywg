@@ -548,7 +548,7 @@ jobs:
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Column(
-                                  crossAxisAlignment: isMe ? CrossAlignment.end : CrossAlignment.start,
+                                  crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       m['sender'], 
