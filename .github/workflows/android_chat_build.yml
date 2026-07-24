@@ -38,12 +38,14 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Safely patch App-level build.gradle to enforce compileSdk and targetSdk
+          # 2. Patch App-level build.gradle to set compileSdk 34 and minSdkVersion 21
           echo "Patching App-level build.gradle..."
           if [ -f android/app/build.gradle ]; then
             sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
             sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
             sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
+            sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
+            sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
           fi
 
           # 3. Add Dependencies to pubspec.yaml
