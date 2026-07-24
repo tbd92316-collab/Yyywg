@@ -33,6 +33,10 @@ jobs:
           # 1. Create Flutter Android Project
           flutter create --org com.globalchat --project-name global_chat_android .
 
+          # Update compileSdkVersion to 36 in build.gradle
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
+          sed -i 's/compileSdk flutter.compileSdk/compileSdk 36/g' android/app/build.gradle
+
           # 2. Add Dependencies to pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
