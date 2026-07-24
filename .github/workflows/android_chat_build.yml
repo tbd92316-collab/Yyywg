@@ -30,7 +30,7 @@ jobs:
 
       - name: Generate Android Chat App
         run: |
-          # 0. Clean workspace completely to avoid 'Already watching path' error
+          # 0. Clean workspace completely
           rm -rf global_chat_android
           mkdir -p global_chat_android
           cd global_chat_android
@@ -38,29 +38,15 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. FORCE API 36 FOR ALL PLUGINS VIA ROOT GRADLE
-          echo "Patching Root build.gradle for all subprojects..."
-          cat << 'EOF' >> android/build.gradle
-
-          subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileSdkVersion 36
-                      }
-                  }
-              }
-          }
-          EOF
-
-          # 3. Patch App-level config
-          echo "Patching App-level config..."
+          # 2. Safely patch App-level build.gradle to enforce compileSdk and targetSdk
+          echo "Patching App-level build.gradle..."
           if [ -f android/app/build.gradle ]; then
-            sed -i 's/flutter.compileSdkVersion/36/g' android/app/build.gradle
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 36/g' android/app/build.gradle
+            sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
+            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
+            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
           fi
 
-          # 4. Add Dependencies to pubspec.yaml
+          # 3. Add Dependencies to pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -90,7 +76,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 5. Create Main Flutter Code for Android
+          # 4. Create Main Flutter Code for Android
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
