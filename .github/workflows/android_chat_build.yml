@@ -396,7 +396,6 @@ jobs:
             void _handleHostWebSocket(WebSocket socket) {
               connectedClients.add(socket);
 
-              // Send all previous chat history to new client automatically
               socket.add(jsonEncode({"type": "history", "data": messages}));
 
               socket.listen((data) {
@@ -443,7 +442,6 @@ jobs:
               try {
                 _clientWs = await WebSocket.connect('ws://${widget.serverIp}:8080');
 
-                // Send join message
                 _clientWs!.add(jsonEncode({
                   "type": "join",
                   "sender": widget.username,
@@ -575,7 +573,7 @@ jobs:
 
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Chat saved to Downloads: ${zipFile.name}"))
+                    SnackBar(content: Text("Chat saved to Downloads: ${zipFile.path.split('/').last}"))
                   );
                 }
               } catch (e) {
@@ -587,7 +585,6 @@ jobs:
               }
             }
 
-            // AUTO-DELETE LOGIC WHEN HOST DESTROYS SERVER OR EXITS
             Future<void> _destroyServerAndExit() async {
               if (widget.isHost) {
                 for (var client in connectedClients) {
@@ -595,7 +592,6 @@ jobs:
                 }
                 await _rawServer?.close(force: true);
 
-                // Permanently delete temp chat history file
                 if (_tempHistoryFile != null && await _tempHistoryFile!.exists()) {
                   await _tempHistoryFile!.delete();
                 }
