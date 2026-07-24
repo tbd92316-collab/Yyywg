@@ -1,9 +1,10 @@
-name: Build Android Local Chat App (.apk)
+name: Build Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
@@ -15,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
@@ -23,17 +24,21 @@ jobs:
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.19.x'
           channel: 'stable'
+          cache: true
 
       - name: Generate Android Chat App
         run: |
+          # 0. Clean workspace completely to avoid 'Already watching path' error
+          rm -rf global_chat_android
           mkdir -p global_chat_android
           cd global_chat_android
 
-          # 1. Create Flutter Android Project
-          flutter create --org com.globalchat --project-name global_chat_android .
+          # 1. Initialize Flutter project cleanly
+          flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. FORCE API 36 FOR ALL PLUGINS VIA GRADLE
+          # 2. FORCE API 36 FOR ALL PLUGINS VIA ROOT GRADLE
           echo "Patching Root build.gradle for all subprojects..."
           cat << 'EOF' >> android/build.gradle
 
@@ -813,16 +818,13 @@ jobs:
           }
           EOF
 
-      - name: Install Dependencies
-        working-directory: ./global_chat_android
-        run: flutter pub get
-
       - name: Build Android APK
-        working-directory: ./global_chat_android
-        run: flutter build apk --release
+        run: |
+          cd global_chat_android
+          flutter build apk --release
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GlobalChat_Android.apk
+          name: app-release
           path: global_chat_android/build/app/outputs/flutter-apk/app-release.apk
