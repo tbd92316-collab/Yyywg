@@ -33,18 +33,25 @@ jobs:
           # 1. Create Flutter Android Project
           flutter create --org com.globalchat --project-name global_chat_android .
 
-          # 2. Update compileSdkVersion to 36 safely (Handles both groovy and kts)
+          # 2. HACK FLUTTER SDK DEFAULTS (Force API 36 for ALL plugins like file_picker)
+          echo "Patching Global Flutter SDK defaults..."
+          FLUTTER_DIR=$(dirname $(dirname $(which flutter)))
+          find "$FLUTTER_DIR/packages/flutter_tools/gradle" -type f -name "*.groovy" -exec sed -i -E 's/compileSdkVersion = [0-9]+/compileSdkVersion = 36/g' {} +
+          find "$FLUTTER_DIR/packages/flutter_tools/gradle" -type f -name "*.groovy" -exec sed -i -E 's/compileSdk = [0-9]+/compileSdk = 36/g' {} +
+
+          # 3. Patch App-level build.gradle safely
+          echo "Patching App-level config..."
           if [ -f android/app/build.gradle ]; then
-            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
-            sed -i 's/compileSdk flutter.compileSdk/compileSdk 36/g' android/app/build.gradle
+            sed -i 's/flutter.compileSdkVersion/36/g' android/app/build.gradle
+            sed -i -E 's/compileSdk [0-9]+/compileSdk 36/g' android/app/build.gradle
           fi
           
           if [ -f android/app/build.gradle.kts ]; then
-            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
-            sed -i 's/compileSdk = flutter.compileSdk/compileSdk = 36/g' android/app/build.gradle.kts
+            sed -i 's/flutter.compileSdkVersion/36/g' android/app/build.gradle.kts
+            sed -i -E 's/compileSdk = [0-9]+/compileSdk = 36/g' android/app/build.gradle.kts
           fi
 
-          # 3. Add Dependencies to pubspec.yaml
+          # 4. Add Dependencies to pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -74,7 +81,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 4. Create Main Flutter Code for Android
+          # 5. Create Main Flutter Code for Android
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
