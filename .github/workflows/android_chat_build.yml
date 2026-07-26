@@ -38,7 +38,7 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Patch App-level build.gradle & AndroidManifest to allow cleartext HTTP (important for local IP file transfers)
+          # 2. Patch App-level build.gradle & AndroidManifest
           echo "Patching Android configurations..."
           if [ -f android/app/build.gradle ]; then
             sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
@@ -83,7 +83,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 4. Create Main Flutter Code for Android
+          # 4. Create Main Flutter Code for Android (Fixed Pipe Errors)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -239,7 +239,7 @@ jobs:
                         await prefs.setString('saved_username', name);
 
                         if (context.mounted) {
-                          Navigator.pop(context); // Close dialog
+                          Navigator.pop(context);
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -376,8 +376,8 @@ jobs:
             WebSocket? _clientWs;
             File? _tempHistoryFile;
             
-            bool _isExiting = false; // Prevents join bugs when returning to home screen
-            bool _isUploading = false; // Upload indicator
+            bool _isExiting = false;
+            bool _isUploading = false;
 
             @override
             void initState() {
@@ -399,23 +399,24 @@ jobs:
                 
                 _rawServer!.listen((HttpRequest request) async {
                   try {
-                    // WebSocket connections
                     if (WebSocketTransformer.isUpgradeRequest(request)) {
                       WebSocket socket = await WebSocketTransformer.upgrade(request);
                       _handleHostWebSocket(socket);
                     } 
-                    // HTTP Uploading mechanism for files
                     else if (request.uri.path == '/upload') {
                       String? fileId = request.uri.queryParameters['id'];
                       if (fileId != null) {
                         File f = File('${dir.path}/$fileId');
                         var sink = f.openWrite();
-                        await request.pipe(sink);
+                        
+                        // FIX: Replaced request.pipe(sink) with addStream
+                        await sink.addStream(request);
+                        await sink.close();
+                        
                         request.response.statusCode = 200;
                         request.response.close();
                       }
                     } 
-                    // HTTP File Delivery (Download/Preview)
                     else if (request.uri.pathSegments.isNotEmpty && request.uri.pathSegments.first == 'files') {
                       String fileId = request.uri.pathSegments[1];
                       File f = File('${dir.path}/$fileId');
@@ -523,7 +524,7 @@ jobs:
             }
 
             void _onServerDestroyed() {
-              if (_isExiting) return; // Prevent double-pop bug when intentionally exiting
+              if (_isExiting) return;
               if (!mounted) return;
               showDialog(
                 context: context,
@@ -581,7 +582,9 @@ jobs:
                   } else {
                     HttpClient client = HttpClient();
                     var req = await client.postUrl(Uri.parse('http://${widget.serverIp}:8080/upload?id=$fileId'));
-                    await file.openRead().pipe(req);
+                    
+                    // FIX: Replaced file.openRead().pipe(req) with addStream
+                    await req.addStream(file.openRead());
                     await req.close();
                   }
 
@@ -617,7 +620,11 @@ jobs:
                   counter++;
                 }
                 
-                await res.pipe(file.openWrite());
+                // FIX: Replaced res.pipe(file.openWrite()) with addStream
+                var sink = file.openWrite();
+                await sink.addStream(res);
+                await sink.close();
+
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Saved: ${file.path.split('/').last}")));
                 }
@@ -853,7 +860,6 @@ jobs:
                                     if (m['text'] != null && m['text'].toString().isNotEmpty)
                                       Text(m['text'], style: const TextStyle(fontSize: 14, color: Colors.white)),
                                     
-                                    // NEW FILE PREVIEW / DOWNLOAD UI
                                     if (m['fileName'] != null)
                                       Container(
                                         margin: const EdgeInsets.only(top: 5),
