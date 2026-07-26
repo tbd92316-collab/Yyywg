@@ -28,6 +28,11 @@ jobs:
           channel: 'stable'
           cache: true
 
+      - name: Install Android 35 SDK Platform
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-35" "build-tools;34.0.0"
+
       - name: Generate Android Chat App
         run: |
           # 0. Clean workspace completely
