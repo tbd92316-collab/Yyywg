@@ -21,13 +21,6 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android 35 Platform explicitly (Fixes AAPT2 error)
-        run: |
-          yes | sdkmanager "platforms;android-35" "build-tools;34.0.0"
-
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
@@ -78,7 +71,7 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. Force Gradle & Kotlin Version Fixes
+          # 3. Force Gradle, Kotlin & SDK 34 Fixes (Bypasses Android 35 AAPT2 error)
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
@@ -91,10 +84,14 @@ jobs:
             fi
           fi
 
-          # Ensure app-level build gradle is clean
+          # Force compileSdk and targetSdk to 34 in app/build.gradle to avoid Android 35 jar error
           if [ -f android/app/build.gradle ]; then
             sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
             sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
+            sed -i -E 's/compileSdkVersion [0-9]+/compileSdkVersion 34/g' android/app/build.gradle
+            sed -i -E 's/targetSdkVersion [0-9]+/targetSdkVersion 34/g' android/app/build.gradle
+            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
+            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
           fi
           
           # Allow HTTP ClearText traffic and required permissions
