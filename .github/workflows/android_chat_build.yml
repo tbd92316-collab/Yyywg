@@ -28,11 +28,6 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Install Android 35 SDK Platform
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platforms;android-35" "build-tools;34.0.0"
-
       - name: Generate Android Chat App
         run: |
           # 0. Clean workspace completely
@@ -43,19 +38,19 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Patch App-level build.gradle & AndroidManifest for SDK 35
+          # 2. Patch App-level build.gradle & AndroidManifest for SDK 34
           echo "Patching Android configurations..."
           if [ -f android/app/build.gradle ]; then
-            sed -i 's/flutter.compileSdkVersion/35/g' android/app/build.gradle
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 35/g' android/app/build.gradle
-            sed -i -E 's/targetSdk [0-9]+/targetSdk 35/g' android/app/build.gradle
+            sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
+            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
+            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
             sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
             sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
           fi
 
           if [ -f android/build.gradle ]; then
-            sed -i 's/compileSdkVersion 34/compileSdkVersion 35/g' android/build.gradle || true
-            sed -i 's/compileSdkVersion 34/compileSdkVersion 35/g' android/app/build.gradle || true
+            sed -i 's/compileSdkVersion 33/compileSdkVersion 34/g' android/build.gradle || true
+            sed -i 's/compileSdkVersion 33/compileSdkVersion 34/g' android/app/build.gradle || true
           fi
           
           # Allow HTTP ClearText traffic and required permissions
