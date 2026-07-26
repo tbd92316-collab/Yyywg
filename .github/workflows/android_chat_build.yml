@@ -38,32 +38,7 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Configure gradle properties & Force modern Kotlin version
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
-
-          # Fix Kotlin version in project-level build.gradle if present, or create/inject ext.kotlin_version
-          if [ -f android/build.gradle ]; then
-            if grep -q "ext.kotlin_version" android/build.gradle; then
-              sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' android/build.gradle
-            else
-              sed -i '/buildscript {/a \    ext.kotlin_version = '\''1.8.22'\''' android/build.gradle
-            fi
-          fi
-
-          # 3. Patch App-level build.gradle (compileSdk 34, targetSdk 34, minSdkVersion 21)
-          if [ -f android/app/build.gradle ]; then
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
-            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
-            sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
-            sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
-          fi
-          
-          # Allow HTTP ClearText traffic and required permissions
-          sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
-          sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
-
-          # 4. Add Dependencies to pubspec.yaml
+          # 2. Add Dependencies to pubspec.yaml FIRST so packages match
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -96,7 +71,37 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 5. Create Main Flutter Code for Android
+          # 3. Force Gradle & Kotlin Version Fixes AFTER project creation
+          echo "android.useAndroidX=true" >> android/gradle.properties
+          echo "android.enableJetifier=true" >> android/gradle.properties
+
+          # Update project-level build.gradle to use Kotlin 1.8.22
+          if [ -f android/build.gradle ]; then
+            if grep -q "ext.kotlin_version" android/build.gradle; then
+              sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' android/build.gradle
+            else
+              sed -i '/buildscript {/a \    ext.kotlin_version = '\''1.8.22'\''' android/build.gradle
+            fi
+          fi
+
+          # Fix app-level build.gradle (compileSdk 34, targetSdk 34, minSdkVersion 21) to prevent SDK 35 path error
+          if [ -f android/app/build.gradle ]; then
+            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
+            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
+            sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
+            sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
+          fi
+
+          # Also check if settings.gradle or plugins block defines kotlin version and override it
+          if [ -f android/settings.gradle ]; then
+            sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.8.22"/g' android/settings.gradle
+          fi
+          
+          # Allow HTTP ClearText traffic and required permissions
+          sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
+          sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
+
+          # 4. Create Main Flutter Code for Android
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
