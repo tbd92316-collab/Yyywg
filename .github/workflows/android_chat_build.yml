@@ -38,7 +38,7 @@ jobs:
           # Create Flutter project
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # --- Overwrite pubspec.yaml ---
+          # --- Overwrite pubspec.yaml with correct version for video_player ---
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -59,7 +59,7 @@ jobs:
             archive: ^4.0.2
             shared_preferences: ^2.2.2
             url_launcher: ^6.2.5
-            video_player: ^8.2.2
+            video_player: ^2.8.2          # FIXED: was ^8.2.2, now correct
             audioplayers: ^6.0.0
 
           dev_dependencies:
@@ -197,7 +197,7 @@ jobs:
           </manifest>
           EOF
 
-          # --- Write complete main.dart (exactly as in original script) ---
+          # --- Write complete main.dart (same as your original) ---
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
