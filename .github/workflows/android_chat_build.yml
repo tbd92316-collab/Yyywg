@@ -38,7 +38,7 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Patch App-level build.gradle & AndroidManifest
+          # 2. Patch App-level build.gradle & AndroidManifest safely
           echo "Patching Android configurations..."
           if [ -f android/app/build.gradle ]; then
             sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
@@ -47,12 +47,17 @@ jobs:
             sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
             sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
           fi
+
+          # Fix for compileSdkVersion in android/build.gradle if present
+          if [ -f android/build.gradle ]; then
+            sed -i 's/compileSdkVersion 35/compileSdkVersion 34/g' android/build.gradle || true
+          fi
           
           # Allow HTTP ClearText traffic and required permissions
           sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
           sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
 
-          # 3. Add Dependencies to pubspec.yaml (including video_player)
+          # 3. Add Dependencies to pubspec.yaml
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -641,7 +646,7 @@ jobs:
                 await sink.close();
 
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Successfully Saved to Downloads!")));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Successfully Saved to Downloads!")));
                 }
               } catch(e) {
                 if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Download failed: $e")));
