@@ -28,17 +28,17 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Generate Android Chat App
+      - name: Generate and Configure Android Chat App
         run: |
-          # 0. Clean workspace completely
+          # Clean and create project
           rm -rf global_chat_android
           mkdir -p global_chat_android
           cd global_chat_android
 
-          # 1. Initialize Flutter project cleanly
+          # Create Flutter project
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Add Dependencies to pubspec.yaml FIRST
+          # --- Overwrite pubspec.yaml ---
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -59,7 +59,7 @@ jobs:
             archive: ^4.0.2
             shared_preferences: ^2.2.2
             url_launcher: ^6.2.5
-            video_player: ^2.8.2
+            video_player: ^8.2.2
             audioplayers: ^6.0.0
 
           dev_dependencies:
@@ -71,34 +71,133 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. Force Gradle, Kotlin & SDK 34 Fixes (Bypasses Android 35 AAPT2 error)
-          echo "android.useAndroidX=true" >> android/gradle.properties
-          echo "android.enableJetifier=true" >> android/gradle.properties
+          # --- Overwrite android/gradle.properties ---
+          cat << 'EOF' > android/gradle.properties
+          org.gradle.jvmargs=-Xmx4g
+          android.useAndroidX=true
+          android.enableJetifier=true
+          EOF
 
-          # Forcefully inject Kotlin version 1.8.22 into root build.gradle
-          if [ -f android/build.gradle ]; then
-            if grep -q "ext.kotlin_version" android/build.gradle; then
-              sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' android/build.gradle
-            else
-              sed -i '/buildscript {/a \    ext.kotlin_version = '\''1.8.22'\''' android/build.gradle
-            fi
-          fi
+          # --- Overwrite android/build.gradle (root) ---
+          cat << 'EOF' > android/build.gradle
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
 
-          # Force compileSdk and targetSdk to 34 in app/build.gradle to avoid Android 35 jar error
-          if [ -f android/app/build.gradle ]; then
-            sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
-            sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
-            sed -i -E 's/compileSdkVersion [0-9]+/compileSdkVersion 34/g' android/app/build.gradle
-            sed -i -E 's/targetSdkVersion [0-9]+/targetSdkVersion 34/g' android/app/build.gradle
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
-            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
-          fi
-          
-          # Allow HTTP ClearText traffic and required permissions
-          sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
-          sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
 
-          # 4. Create Main Flutter Code for Android
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+
+          tasks.register('clean', Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+          # --- Overwrite android/app/build.gradle ---
+          cat << 'EOF' > android/app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'kotlin-android'
+              id 'dev.flutter.flutter-gradle-plugin'
+          }
+
+          android {
+              namespace 'com.globalchat.global_chat_android'
+              compileSdk 34
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+
+              sourceSets {
+                  main.java.srcDirs += 'src/main/kotlin'
+              }
+
+              defaultConfig {
+                  applicationId 'com.globalchat.global_chat_android'
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0.0'
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.debug
+                  }
+              }
+          }
+
+          flutter {
+              source '../..'
+          }
+
+          dependencies {}
+          EOF
+
+          # --- Overwrite AndroidManifest.xml with permissions ---
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.globalchat.global_chat_android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+
+              <application
+                  android:label="GlobalChat"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTop"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                          android:name="io.flutter.embedding.android.NormalTheme"
+                          android:resource="@style/NormalTheme" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # --- Write complete main.dart (exactly as in original script) ---
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -1155,6 +1254,9 @@ jobs:
             }
           }
           EOF
+
+          # Get dependencies
+          flutter pub get
 
       - name: Build Android APK
         run: |
