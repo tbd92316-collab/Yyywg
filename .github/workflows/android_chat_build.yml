@@ -38,8 +38,8 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Patch App-level build.gradle to set compileSdk 34 and minSdkVersion 21
-          echo "Patching App-level build.gradle..."
+          # 2. Patch App-level build.gradle & AndroidManifest to allow cleartext HTTP (important for local IP file transfers)
+          echo "Patching Android configurations..."
           if [ -f android/app/build.gradle ]; then
             sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
             sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
@@ -47,6 +47,10 @@ jobs:
             sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
             sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
           fi
+          
+          # Allow HTTP ClearText traffic and required permissions
+          sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
+          sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
 
           # 3. Add Dependencies to pubspec.yaml
           cat << 'EOF' > pubspec.yaml
@@ -68,6 +72,7 @@ jobs:
             file_picker: ^8.0.0
             archive: ^4.0.2
             shared_preferences: ^2.2.2
+            url_launcher: ^6.2.5
 
           dev_dependencies:
             flutter_test:
@@ -83,7 +88,6 @@ jobs:
           import 'dart:async';
           import 'dart:convert';
           import 'dart:io';
-          import 'dart:typed_data';
           import 'package:flutter/material.dart';
           import 'package:network_info_plus/network_info_plus.dart';
           import 'package:path_provider/path_provider.dart';
@@ -92,6 +96,7 @@ jobs:
           import 'package:file_picker/file_picker.dart';
           import 'package:archive/archive_io.dart';
           import 'package:shared_preferences/shared_preferences.dart';
+          import 'package:url_launcher/url_launcher.dart';
 
           void main() {
             runApp(const GlobalChatApp());
@@ -234,7 +239,7 @@ jobs:
                         await prefs.setString('saved_username', name);
 
                         if (context.mounted) {
-                          Navigator.pop(context);
+                          Navigator.pop(context); // Close dialog
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -370,6 +375,9 @@ jobs:
             List<WebSocket> connectedClients = [];
             WebSocket? _clientWs;
             File? _tempHistoryFile;
+            
+            bool _isExiting = false; // Prevents join bugs when returning to home screen
+            bool _isUploading = false; // Upload indicator
 
             @override
             void initState() {
@@ -390,9 +398,37 @@ jobs:
                 _rawServer = await HttpServer.bind(InternetAddress.anyIPv4, 8080);
                 
                 _rawServer!.listen((HttpRequest request) async {
-                  if (WebSocketTransformer.isUpgradeRequest(request)) {
-                    WebSocket socket = await WebSocketTransformer.upgrade(request);
-                    _handleHostWebSocket(socket);
+                  try {
+                    // WebSocket connections
+                    if (WebSocketTransformer.isUpgradeRequest(request)) {
+                      WebSocket socket = await WebSocketTransformer.upgrade(request);
+                      _handleHostWebSocket(socket);
+                    } 
+                    // HTTP Uploading mechanism for files
+                    else if (request.uri.path == '/upload') {
+                      String? fileId = request.uri.queryParameters['id'];
+                      if (fileId != null) {
+                        File f = File('${dir.path}/$fileId');
+                        var sink = f.openWrite();
+                        await request.pipe(sink);
+                        request.response.statusCode = 200;
+                        request.response.close();
+                      }
+                    } 
+                    // HTTP File Delivery (Download/Preview)
+                    else if (request.uri.pathSegments.isNotEmpty && request.uri.pathSegments.first == 'files') {
+                      String fileId = request.uri.pathSegments[1];
+                      File f = File('${dir.path}/$fileId');
+                      if (f.existsSync()) {
+                        await request.response.addStream(f.openRead());
+                        request.response.close();
+                      } else {
+                        request.response.statusCode = 404;
+                        request.response.close();
+                      }
+                    }
+                  } catch (e) {
+                    debugPrint("Server handling error: $e");
                   }
                 });
 
@@ -410,7 +446,6 @@ jobs:
 
             void _handleHostWebSocket(WebSocket socket) {
               connectedClients.add(socket);
-
               socket.add(jsonEncode({"type": "history", "data": messages}));
 
               socket.listen((data) {
@@ -433,6 +468,8 @@ jobs:
                   debugPrint("Error handling message: $e");
                 }
               }, onDone: () {
+                connectedClients.remove(socket);
+              }, onError: (error) {
                 connectedClients.remove(socket);
               });
             }
@@ -486,6 +523,7 @@ jobs:
             }
 
             void _onServerDestroyed() {
+              if (_isExiting) return; // Prevent double-pop bug when intentionally exiting
               if (!mounted) return;
               showDialog(
                 context: context,
@@ -506,14 +544,14 @@ jobs:
               );
             }
 
-            void _sendMessage({String? fileData, String? fileName}) {
+            void _sendMessage({String? fileId, String? fileName}) {
               String text = _msgController.text.trim();
-              if (text.isEmpty && fileData == null) return;
+              if (text.isEmpty && fileId == null) return;
 
               var msgData = {
                 "sender": widget.username,
                 "text": text,
-                "fileData": fileData,
+                "fileId": fileId,
                 "fileName": fileName,
                 "time": _currentTime()
               };
@@ -531,10 +569,72 @@ jobs:
             void _pickAndSendFile() async {
               FilePickerResult? result = await FilePicker.platform.pickFiles();
               if (result != null && result.files.single.path != null) {
-                File file = File(result.files.single.path!);
-                Uint8List bytes = await file.readAsBytes();
-                String base64File = base64Encode(bytes);
-                _sendMessage(fileData: base64File, fileName: result.files.single.name);
+                setState(() => _isUploading = true);
+                try {
+                  File file = File(result.files.single.path!);
+                  String fileName = result.files.single.name;
+                  String fileId = DateTime.now().millisecondsSinceEpoch.toString();
+
+                  if (widget.isHost) {
+                    final dir = await getTemporaryDirectory();
+                    await file.copy('${dir.path}/$fileId');
+                  } else {
+                    HttpClient client = HttpClient();
+                    var req = await client.postUrl(Uri.parse('http://${widget.serverIp}:8080/upload?id=$fileId'));
+                    await file.openRead().pipe(req);
+                    await req.close();
+                  }
+
+                  _sendMessage(fileId: fileId, fileName: fileName);
+                } catch(e) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("File transfer failed: $e")));
+                }
+                setState(() => _isUploading = false);
+              }
+            }
+
+            Future<void> _downloadFile(String fileId, String fileName) async {
+              try {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Downloading...")));
+                HttpClient client = HttpClient();
+                var req = await client.getUrl(Uri.parse('http://${widget.serverIp}:8080/files/$fileId/${Uri.encodeComponent(fileName)}'));
+                var res = await req.close();
+                
+                final dir = Directory('/storage/emulated/0/Download');
+                String savePath = dir.existsSync() ? dir.path : (await getApplicationDocumentsDirectory()).path;
+                
+                String baseName = fileName;
+                String ext = "";
+                if (fileName.contains('.')) {
+                  baseName = fileName.substring(0, fileName.lastIndexOf('.'));
+                  ext = fileName.substring(fileName.lastIndexOf('.'));
+                }
+
+                File file = File('$savePath/$fileName');
+                int counter = 1;
+                while (file.existsSync()) {
+                  file = File('$savePath/${baseName}_($counter)$ext');
+                  counter++;
+                }
+                
+                await res.pipe(file.openWrite());
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Saved: ${file.path.split('/').last}")));
+                }
+              } catch(e) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Download failed: $e")));
+              }
+            }
+
+            bool _canPreview(String fileName) {
+              String ext = fileName.split('.').last.toLowerCase();
+              return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'mp3', 'wav', 'ogg', 'm4a', 'pdf'].contains(ext);
+            }
+
+            void _previewFile(String fileId, String fileName) async {
+              String url = 'http://${widget.serverIp}:8080/files/$fileId/${Uri.encodeComponent(fileName)}';
+              if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Could not open preview")));
               }
             }
 
@@ -601,6 +701,7 @@ jobs:
             }
 
             Future<void> _destroyServerAndExit() async {
+              _isExiting = true;
               if (widget.isHost) {
                 for (var client in connectedClients) {
                   client.close();
@@ -617,6 +718,7 @@ jobs:
             }
 
             void _showErrorAndExit(String error) {
+              _isExiting = true;
               showDialog(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -712,6 +814,7 @@ jobs:
                   ),
                   body: Column(
                     children: [
+                      if (_isUploading) const LinearProgressIndicator(),
                       Expanded(
                         child: ListView.builder(
                           padding: const EdgeInsets.all(12),
@@ -749,20 +852,59 @@ jobs:
                                     const SizedBox(height: 3),
                                     if (m['text'] != null && m['text'].toString().isNotEmpty)
                                       Text(m['text'], style: const TextStyle(fontSize: 14, color: Colors.white)),
+                                    
+                                    // NEW FILE PREVIEW / DOWNLOAD UI
                                     if (m['fileName'] != null)
                                       Container(
                                         margin: const EdgeInsets.only(top: 5),
-                                        padding: const EdgeInsets.all(6),
-                                        color: Colors.black26,
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(color: Colors.black26, borderRadius: BorderRadius.circular(8)),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            const Icon(Icons.insert_drive_file, size: 16, color: Colors.white),
-                                            const SizedBox(width: 5),
-                                            Text(m['fileName'], style: const TextStyle(fontSize: 12, color: Colors.amberAccent)),
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                const Icon(Icons.insert_drive_file, size: 16, color: Colors.white),
+                                                const SizedBox(width: 5),
+                                                Flexible(
+                                                  child: Text(m['fileName'], style: const TextStyle(fontSize: 12, color: Colors.amberAccent), overflow: TextOverflow.ellipsis),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                ElevatedButton.icon(
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor: Colors.green,
+                                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                    minimumSize: const Size(0, 30),
+                                                  ),
+                                                  icon: const Icon(Icons.download, size: 14, color: Colors.white),
+                                                  label: const Text("Download", style: TextStyle(fontSize: 11, color: Colors.white)),
+                                                  onPressed: () => _downloadFile(m['fileId'], m['fileName']),
+                                                ),
+                                                if (_canPreview(m['fileName'])) ...[
+                                                  const SizedBox(width: 8),
+                                                  ElevatedButton.icon(
+                                                    style: ElevatedButton.styleFrom(
+                                                      backgroundColor: Colors.blue,
+                                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                      minimumSize: const Size(0, 30),
+                                                    ),
+                                                    icon: const Icon(Icons.visibility, size: 14, color: Colors.white),
+                                                    label: const Text("Preview", style: TextStyle(fontSize: 11, color: Colors.white)),
+                                                    onPressed: () => _previewFile(m['fileId'], m['fileName']),
+                                                  ),
+                                                ]
+                                              ],
+                                            )
                                           ],
                                         ),
                                       ),
+                                    
                                     const SizedBox(height: 2),
                                     Text(m['time'], style: const TextStyle(fontSize: 8, color: Colors.white38)),
                                   ],
