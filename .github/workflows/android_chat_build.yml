@@ -21,6 +21,13 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android 35 Platform explicitly (Fixes AAPT2 error)
+        run: |
+          yes | sdkmanager "platforms;android-35" "build-tools;34.0.0"
+
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
@@ -38,7 +45,7 @@ jobs:
           # 1. Initialize Flutter project cleanly
           flutter create . --org com.globalchat --project-name global_chat_android
 
-          # 2. Add Dependencies to pubspec.yaml FIRST so packages match
+          # 2. Add Dependencies to pubspec.yaml FIRST
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -71,11 +78,11 @@ jobs:
             uses-material-design: true
           EOF
 
-          # 3. Force Gradle & Kotlin Version Fixes AFTER project creation
+          # 3. Force Gradle & Kotlin Version Fixes
           echo "android.useAndroidX=true" >> android/gradle.properties
           echo "android.enableJetifier=true" >> android/gradle.properties
 
-          # Update project-level build.gradle to use Kotlin 1.8.22
+          # Forcefully inject Kotlin version 1.8.22 into root build.gradle
           if [ -f android/build.gradle ]; then
             if grep -q "ext.kotlin_version" android/build.gradle; then
               sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.8.22'\''/g' android/build.gradle
@@ -84,17 +91,10 @@ jobs:
             fi
           fi
 
-          # Fix app-level build.gradle (compileSdk 34, targetSdk 34, minSdkVersion 21) to prevent SDK 35 path error
+          # Ensure app-level build gradle is clean
           if [ -f android/app/build.gradle ]; then
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
-            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
             sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
             sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
-          fi
-
-          # Also check if settings.gradle or plugins block defines kotlin version and override it
-          if [ -f android/settings.gradle ]; then
-            sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.8.22"/g' android/settings.gradle
           fi
           
           # Allow HTTP ClearText traffic and required permissions
