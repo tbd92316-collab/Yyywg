@@ -52,7 +52,7 @@ jobs:
           sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
           sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
 
-          # 3. Add Dependencies to pubspec.yaml
+          # 3. Add Dependencies to pubspec.yaml (including video_player)
           cat << 'EOF' > pubspec.yaml
           name: global_chat_android
           description: "Global Wi-Fi Offline Chat Android App"
@@ -73,6 +73,8 @@ jobs:
             archive: ^4.0.2
             shared_preferences: ^2.2.2
             url_launcher: ^6.2.5
+            video_player: ^2.8.2
+            audioplayers: ^6.0.0
 
           dev_dependencies:
             flutter_test:
@@ -97,6 +99,8 @@ jobs:
           import 'package:archive/archive_io.dart';
           import 'package:shared_preferences/shared_preferences.dart';
           import 'package:url_launcher/url_launcher.dart';
+          import 'package:video_player/video_player.dart';
+          import 'package:audioplayers/audioplayers.dart';
 
           void main() {
             runApp(const GlobalChatApp());
@@ -425,9 +429,9 @@ jobs:
                           String ext = fName.contains('.') ? fName.split('.').last.toLowerCase() : '';
                           if (['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext)) {
                             mimeType = ext == 'jpg' ? 'image/jpeg' : 'image/$ext';
-                          } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi') {
+                          } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi' || ext == 'mov') {
                             mimeType = 'video/mp4';
-                          } else if (ext == 'mp3' || ext == 'wav' || ext == 'm4a') {
+                          } else if (ext == 'mp3' || ext == 'wav' || ext == 'm4a' || ext == 'aac') {
                             mimeType = 'audio/mpeg';
                           } else if (ext == 'pdf') {
                             mimeType = 'application/pdf';
@@ -610,7 +614,7 @@ jobs:
 
             Future<void> _downloadFile(String fileId, String fileName) async {
               try {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Downloading...")));
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Downloading file...")));
                 HttpClient client = HttpClient();
                 var req = await client.getUrl(Uri.parse('http://${widget.serverIp}:8080/files/$fileId/${Uri.encodeComponent(fileName)}'));
                 var res = await req.close();
@@ -637,7 +641,7 @@ jobs:
                 await sink.close();
 
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Saved: ${file.path.split('/').last}")));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Successfully Saved to Downloads!")));
                 }
               } catch(e) {
                 if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Download failed: $e")));
@@ -645,7 +649,7 @@ jobs:
             }
 
             bool _canPreview(String fileName) {
-              String ext = fileName.split('.').last.toLowerCase();
+              String ext = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
               return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'mp3', 'wav', 'ogg', 'm4a', 'pdf'].contains(ext);
             }
 
@@ -967,69 +971,173 @@ jobs:
             }
           }
 
-          class AppPreviewScreen extends StatelessWidget {
+          class AppPreviewScreen extends StatefulWidget {
             final String url;
             final String fileName;
 
             const AppPreviewScreen({super.key, required this.url, required this.fileName});
 
             @override
+            State<AppPreviewScreen> createState() => _AppPreviewScreenState();
+          }
+
+          class _AppPreviewScreenState extends State<AppPreviewScreen> {
+            VideoPlayerController? _videoController;
+            AudioPlayer? _audioPlayer;
+            bool isPlaying = false;
+            bool isLoadingMedia = true;
+
+            @override
+            void initState() {
+              super.initState();
+              _initMediaPreview();
+            }
+
+            void _initMediaPreview() async {
+              String ext = widget.fileName.contains('.') ? widget.fileName.split('.').last.toLowerCase() : '';
+              if (['mp4', 'mkv', 'avi', 'mov'].contains(ext)) {
+                _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.url))
+                  ..initialize().then((_) {
+                    setState(() {
+                      isLoadingMedia = false;
+                    });
+                    _videoController!.play();
+                  });
+              } else if (['mp3', 'wav', 'ogg', 'm4a'].contains(ext)) {
+                _audioPlayer = AudioPlayer();
+                await _audioPlayer!.setSource(UrlSource(widget.url));
+                setState(() {
+                  isLoadingMedia = false;
+                });
+                _audioPlayer!.resume();
+                setState(() {
+                  isPlaying = true;
+                });
+                _audioPlayer!.onPlayerComplete.listen((_) {
+                  setState(() {
+                    isPlaying = false;
+                  });
+                });
+              } else {
+                setState(() {
+                  isLoadingMedia = false;
+                });
+              }
+            }
+
+            @override
+            void dispose() {
+              _videoController?.dispose();
+              _audioPlayer?.dispose();
+              super.dispose();
+            }
+
+            @override
             Widget build(BuildContext context) {
-              String ext = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+              String ext = widget.fileName.contains('.') ? widget.fileName.split('.').last.toLowerCase() : '';
               bool isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext);
+              bool isVideo = ['mp4', 'mkv', 'avi', 'mov'].contains(ext);
+              bool isAudio = ['mp3', 'wav', 'ogg', 'm4a'].contains(ext);
+              bool isPdf = ext == 'pdf';
 
               return Scaffold(
                 backgroundColor: Colors.black,
                 appBar: AppBar(
                   backgroundColor: Colors.black,
                   iconTheme: const IconThemeData(color: Colors.white),
-                  title: Text(fileName, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  title: Text(widget.fileName, style: const TextStyle(color: Colors.white, fontSize: 16)),
                   leading: IconButton(
                     icon: const Icon(Icons.close),
                     onPressed: () => Navigator.pop(context),
                   ),
                 ),
                 body: Center(
-                  child: isImage
-                      ? InteractiveViewer(
-                          child: Image.network(
-                            url,
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              return const CircularProgressIndicator(color: Colors.white);
-                            },
-                            errorBuilder: (context, error, stackTrace) => const Text(
-                              "Failed to load image", 
-                              style: TextStyle(color: Colors.white)
-                            ),
-                          ),
-                        )
-                      : Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.ondemand_video, size: 80, color: Colors.white54),
-                            const SizedBox(height: 20),
-                            const Text(
-                              "This media can be opened directly in your device player.", 
-                              style: TextStyle(color: Colors.white70)
-                            ),
-                            const SizedBox(height: 20),
-                            ElevatedButton.icon(
-                              icon: const Icon(Icons.open_in_new),
-                              label: const Text("Open in Phone's Media Player"),
-                              onPressed: () async {
-                                if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Could not open media"))
-                                    );
-                                  }
-                                }
-                              },
+                  child: isLoadingMedia
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : isImage
+                          ? InteractiveViewer(
+                              child: Image.network(
+                                widget.url,
+                                loadingBuilder: (context, child, loadingProgress) {
+                                  if (loadingProgress == null) return child;
+                                  return const CircularProgressIndicator(color: Colors.white);
+                                },
+                                errorBuilder: (context, error, stackTrace) => const Text(
+                                  "Failed to load image", 
+                                  style: TextStyle(color: Colors.white)
+                                ),
+                              ),
                             )
-                          ],
-                        ),
+                          : isVideo
+                              ? _videoController != null && _videoController!.value.isInitialized
+                                  ? AspectRatio(
+                                      aspectRatio: _videoController!.value.aspectRatio,
+                                      child: VideoPlayer(_videoController!),
+                                    )
+                                  : const Text("Failed to load video", style: TextStyle(color: Colors.white))
+                              : isAudio
+                                  ? Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(Icons.audiotrack, size: 90, color: Colors.blueAccent),
+                                        const SizedBox(height: 20),
+                                        Text(widget.fileName, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                                        const SizedBox(height: 30),
+                                        IconButton(
+                                          iconSize: 64,
+                                          color: Colors.white,
+                                          icon: Icon(isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                                          onPressed: () async {
+                                            if (isPlaying) {
+                                              await _audioPlayer!.pause();
+                                              setState(() => isPlaying = false);
+                                            } else {
+                                              await _audioPlayer!.resume();
+                                              setState(() => isPlaying = true);
+                                            }
+                                          },
+                                        )
+                                      ],
+                                    )
+                                  : isPdf
+                                      ? Column(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            const Icon(Icons.picture_as_pdf, size: 80, color: Colors.redAccent),
+                                            const SizedBox(height: 20),
+                                            const Text("PDF Document Ready", style: TextStyle(color: Colors.white70, fontSize: 16)),
+                                            const SizedBox(height: 20),
+                                            ElevatedButton.icon(
+                                              icon: const Icon(Icons.download),
+                                              label: const Text("Download PDF to Read"),
+                                              onPressed: () async {
+                                                if (!await launchUrl(Uri.parse(widget.url), mode: LaunchMode.externalApplication)) {
+                                                  if (context.mounted) {
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      const SnackBar(content: Text("Could not open PDF"))
+                                                    );
+                                                  }
+                                                }
+                                              },
+                                            )
+                                          ],
+                                        )
+                                      : const Text("Preview not supported for this file type", style: TextStyle(color: Colors.white)),
                 ),
+                floatingActionButton: isVideo && _videoController != null && _videoController!.value.isInitialized
+                    ? FloatingActionButton(
+                        backgroundColor: Colors.white,
+                        child: Icon(
+                          _videoController!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                          color: Colors.black,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _videoController!.value.isPlaying ? _videoController!.pause() : _videoController!.play();
+                          });
+                        },
+                      )
+                    : null,
               );
             }
           }
