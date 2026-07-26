@@ -1,89 +1,4 @@
-name: Build Android APK
-
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-jobs:
-  build-android:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Set up Flutter SDK
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.19.x'
-          channel: 'stable'
-          cache: true
-
-      - name: Generate Android Chat App
-        run: |
-          # 0. Clean workspace completely
-          rm -rf global_chat_android
-          mkdir -p global_chat_android
-          cd global_chat_android
-
-          # 1. Initialize Flutter project cleanly
-          flutter create . --org com.globalchat --project-name global_chat_android
-
-          # 2. Patch App-level build.gradle & AndroidManifest
-          echo "Patching Android configurations..."
-          if [ -f android/app/build.gradle ]; then
-            sed -i 's/flutter.compileSdkVersion/34/g' android/app/build.gradle
-            sed -i -E 's/compileSdk [0-9]+/compileSdk 34/g' android/app/build.gradle
-            sed -i -E 's/targetSdk [0-9]+/targetSdk 34/g' android/app/build.gradle
-            sed -i -E 's/minSdkVersion [0-9]+/minSdkVersion 21/g' android/app/build.gradle
-            sed -i -E 's/flutter.minSdkVersion/21/g' android/app/build.gradle
-          fi
-          
-          # Allow HTTP ClearText traffic and required permissions
-          sed -i 's/<application/<application android:usesCleartextTraffic="true"/g' android/app/src/main/AndroidManifest.xml
-          sed -i '/<manifest /a \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />' android/app/src/main/AndroidManifest.xml
-
-          # 3. Add Dependencies to pubspec.yaml
-          cat << 'EOF' > pubspec.yaml
-          name: global_chat_android
-          description: "Global Wi-Fi Offline Chat Android App"
-          publish_to: 'none'
-          version: 1.0.0+1
-
-          environment:
-            sdk: '>=3.0.0 <4.0.0'
-
-          dependencies:
-            flutter:
-              sdk: flutter
-            path_provider: ^2.1.2
-            network_info_plus: ^5.0.1
-            qr_flutter: ^4.1.0
-            mobile_scanner: ^5.1.1
-            file_picker: ^8.0.0
-            archive: ^4.0.2
-            shared_preferences: ^2.2.2
-            url_launcher: ^6.2.5
-
-          dev_dependencies:
-            flutter_test:
-              sdk: flutter
-            flutter_lints: ^3.0.0
-
-          flutter:
-            uses-material-design: true
-          EOF
-
-          # 4. Create Main Flutter Code for Android (Fixed Pipe Errors)
+          # 4. Create Main Flutter Code for Android (Fixed Preview & Server Content-Type)
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -408,11 +323,8 @@ jobs:
                       if (fileId != null) {
                         File f = File('${dir.path}/$fileId');
                         var sink = f.openWrite();
-                        
-                        // FIX: Replaced request.pipe(sink) with addStream
                         await sink.addStream(request);
                         await sink.close();
-                        
                         request.response.statusCode = 200;
                         request.response.close();
                       }
@@ -420,7 +332,25 @@ jobs:
                     else if (request.uri.pathSegments.isNotEmpty && request.uri.pathSegments.first == 'files') {
                       String fileId = request.uri.pathSegments[1];
                       File f = File('${dir.path}/$fileId');
+                      
                       if (f.existsSync()) {
+                        // FIX: Added proper Content-Type so external players don't show binary text
+                        String mimeType = 'application/octet-stream';
+                        if (request.uri.pathSegments.length > 2) {
+                          String fName = Uri.decodeComponent(request.uri.pathSegments[2]);
+                          String ext = fName.contains('.') ? fName.split('.').last.toLowerCase() : '';
+                          if (['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext)) {
+                            mimeType = ext == 'jpg' ? 'image/jpeg' : 'image/$ext';
+                          } else if (ext == 'mp4' || ext == 'mkv' || ext == 'avi') {
+                            mimeType = 'video/mp4'; // fallback container mapping
+                          } else if (ext == 'mp3' || ext == 'wav' || ext == 'm4a') {
+                            mimeType = 'audio/mpeg';
+                          } else if (ext == 'pdf') {
+                            mimeType = 'application/pdf';
+                          }
+                        }
+                        request.response.headers.set(HttpHeaders.contentTypeHeader, mimeType);
+                        
                         await request.response.addStream(f.openRead());
                         request.response.close();
                       } else {
@@ -582,8 +512,6 @@ jobs:
                   } else {
                     HttpClient client = HttpClient();
                     var req = await client.postUrl(Uri.parse('http://${widget.serverIp}:8080/upload?id=$fileId'));
-                    
-                    // FIX: Replaced file.openRead().pipe(req) with addStream
                     await req.addStream(file.openRead());
                     await req.close();
                   }
@@ -620,7 +548,6 @@ jobs:
                   counter++;
                 }
                 
-                // FIX: Replaced res.pipe(file.openWrite()) with addStream
                 var sink = file.openWrite();
                 await sink.addStream(res);
                 await sink.close();
@@ -638,11 +565,16 @@ jobs:
               return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'mkv', 'avi', 'mov', 'mp3', 'wav', 'ogg', 'm4a', 'pdf'].contains(ext);
             }
 
-            void _previewFile(String fileId, String fileName) async {
+            void _previewFile(String fileId, String fileName) {
               String url = 'http://${widget.serverIp}:8080/files/$fileId/${Uri.encodeComponent(fileName)}';
-              if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Could not open preview")));
-              }
+              
+              // NEW FIX: Opens a custom Preview Screen with X button inside the app
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => AppPreviewScreen(url: url, fileName: fileName),
+                ),
+              );
             }
 
             String _currentTime() {
@@ -952,15 +884,72 @@ jobs:
               );
             }
           }
+
+          // NEW WIDGET: Custom In-App Preview Screen
+          class AppPreviewScreen extends StatelessWidget {
+            final String url;
+            final String fileName;
+
+            const AppPreviewScreen({super.key, required this.url, required this.fileName});
+
+            @override
+            Widget build(BuildContext context) {
+              String ext = fileName.contains('.') ? fileName.split('.').last.toLowerCase() : '';
+              bool isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp'].contains(ext);
+
+              return Scaffold(
+                backgroundColor: Colors.black,
+                appBar: AppBar(
+                  backgroundColor: Colors.black,
+                  iconTheme: const IconThemeData(color: Colors.white),
+                  title: Text(fileName, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  leading: IconButton(
+                    icon: const Icon(Icons.close), // X Button for closing
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+                body: Center(
+                  child: isImage
+                      ? InteractiveViewer( // Allows zooming the image
+                          child: Image.network(
+                            url,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return const CircularProgressIndicator(color: Colors.white);
+                            },
+                            errorBuilder: (context, error, stackTrace) => const Text(
+                              "Failed to load image", 
+                              style: TextStyle(color: Colors.white)
+                            ),
+                          ),
+                        )
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.ondemand_video, size: 80, color: Colors.white54),
+                            const SizedBox(height: 20),
+                            const Text(
+                              "This media requires an external player.", 
+                              style: TextStyle(color: Colors.white70)
+                            ),
+                            const SizedBox(height: 20),
+                            ElevatedButton.icon(
+                              icon: const Icon(Icons.open_in_new),
+                              label: const Text("Open in Phone's Media Player"),
+                              onPressed: () async {
+                                if (!await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication)) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("Could not open media"))
+                                    );
+                                  }
+                                }
+                              }
+                            )
+                          ],
+                        ),
+                ),
+              );
+            }
+          }
           EOF
-
-      - name: Build Android APK
-        run: |
-          cd global_chat_android
-          flutter build apk --release
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release
-          path: global_chat_android/build/app/outputs/flutter-apk/app-release.apk
